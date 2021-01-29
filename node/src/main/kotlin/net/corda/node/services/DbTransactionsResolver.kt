@@ -21,6 +21,7 @@ class DbTransactionsResolver(private val flow: ResolveTransactionsFlow) : Transa
 
     @Suspendable
     override fun downloadDependencies(batchMode: Boolean) {
+        println("downloadDependencies - start")
         logger.debug { "Downloading dependencies for transactions ${flow.txHashes}" }
         val transactionStorage = flow.serviceHub.validatedTransactions as WritableTransactionStorage
 
@@ -45,6 +46,8 @@ class DbTransactionsResolver(private val flow: ResolveTransactionsFlow) : Transa
         logger.debug { "DbTransactionsResolver.downloadDependencies(batchMode=$batchMode)" }
 
         while (nextRequests.isNotEmpty()) {
+            println(topologicalSort.transactionIds.size)
+
             logger.debug { "Main fetch loop: size_remaining=${nextRequests.size}" }
             // Don't re-download the same tx when we haven't verified it yet but it's referenced multiple times in the
             // graph we're traversing.
@@ -53,37 +56,38 @@ class DbTransactionsResolver(private val flow: ResolveTransactionsFlow) : Transa
                 // Done early.
                 break
             }
+            println(nextRequests)
 
             // Request the standalone transaction data (which may refer to things we don't yet have).
             val (existingTxIds, downloadedTxs) = fetchRequiredTransactions(Collections.singleton(nextRequests.first())) // Fetch first item only
             for (tx in downloadedTxs) {
-                val dependencies = tx.dependencies
-                topologicalSort.add(tx.id, dependencies)
+                topologicalSort.add(tx.id, tx.dependencies)
             }
 
-            var suspended = true
-            for (downloaded in downloadedTxs) {
-                suspended = false
-                val dependencies = downloaded.dependencies
+//            var suspended = true
+            for (tx in downloadedTxs) {
+//                suspended = false
+
                 // Do not keep in memory as this bloats the checkpoint. Write each item to the database.
-                transactionStorage.addUnverifiedTransaction(downloaded)
+                transactionStorage.addUnverifiedTransaction(tx)
 
                 // The write locks are only released over a suspend, so need to keep track of whether the flow has been suspended to ensure
                 // that locks are not held beyond each while loop iteration (as doing this would result in a deadlock due to claiming locks
                 // in the wrong order)
-                val suspendedViaAttachments = flow.fetchMissingAttachments(downloaded)
-                val suspendedViaParams = flow.fetchMissingNetworkParameters(downloaded)
-                suspended = suspended || suspendedViaAttachments || suspendedViaParams
+//                val suspendedViaAttachments = flow.fetchMissingAttachments(tx)
+//                val suspendedViaParams = flow.fetchMissingNetworkParameters(tx)
+
+//                suspended = suspended || suspendedViaAttachments || suspendedViaParams
 
                 // Add all input states and reference input states to the work queue.
-                nextRequests.addAll(dependencies)
+                nextRequests.addAll(tx.dependencies)
             }
 
             // If the flow did not suspend on the last iteration of the downloaded loop above, perform a suspend here to ensure that
             // all data is flushed to the database.
-            if (!suspended) {
+//            if (!suspended) {
                 FlowLogic.sleep(0.seconds)
-            }
+//            }
 
             // It's possible that the node has a transaction in storage already. Dependencies should also be present for this transaction,
             // so just remove these IDs from the set of next requests.
@@ -92,13 +96,26 @@ class DbTransactionsResolver(private val flow: ResolveTransactionsFlow) : Transa
 
         sortedDependencies = topologicalSort.complete()
         logger.debug { "Downloaded ${sortedDependencies?.size} dependencies from remote peer for transactions ${flow.txHashes}" }
+        println("downloadDependencies - end")
     }
 
     override fun recordDependencies(usedStatesToRecord: StatesToRecord) {
+        println("recordDependencies - start")
+
         val sortedDependencies = checkNotNull(this.sortedDependencies)
         logger.trace { "Recording ${sortedDependencies.size} dependencies for ${flow.txHashes.size} transactions" }
         val transactionStorage = flow.serviceHub.validatedTransactions as WritableTransactionStorage
+
+        println(flow.initialTx)
+        println(flow.txHashes)
+
+        println("Sorted:")
+        sortedDependencies.forEach { println(it) }
+
+        println()
+        println("Verification:")
         for (txId in sortedDependencies) {
+            println(txId)
             // Retrieve and delete the transaction from the unverified store.
             val (tx, isVerified) = checkNotNull(transactionStorage.getTransactionInternal(txId)) {
                 "Somehow the unverified transaction ($txId) that we stored previously is no longer there."
@@ -110,6 +127,8 @@ class DbTransactionsResolver(private val flow: ResolveTransactionsFlow) : Transa
                 logger.debug { "No need to record $txId as it's already been verified" }
             }
         }
+        println("recordDependencies - end")
+
     }
 
     // The transactions already present in the database do not need to be checkpointed on every iteration of downloading
@@ -125,9 +144,9 @@ class DbTransactionsResolver(private val flow: ResolveTransactionsFlow) : Transa
      * T1 and T2 in the list returned by [complete] if T1 is a dependency of T2 then T1 will occur earlier than T2.
      */
     class TopologicalSort {
-        private val forwardGraph = HashMap<SecureHash, MutableSet<SecureHash>>()
+         val forwardGraph = HashMap<SecureHash, MutableSet<SecureHash>>() //private
         val transactionIds = LinkedHashSet<SecureHash>()
-        private val nonDupeHash = HashMap<SecureHash, SecureHash>()
+         val nonDupeHash = HashMap<SecureHash, SecureHash>() //private
         private fun dedupe(sh: SecureHash): SecureHash = nonDupeHash.getOrPut(sh) { sh }
 
         /**

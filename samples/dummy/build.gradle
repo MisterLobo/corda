@@ -1,0 +1,29 @@
+apply plugin: 'net.corda.plugins.cordapp'
+apply plugin: 'net.corda.plugins.cordformation'
+apply plugin: 'net.corda.plugins.quasar-utils'
+
+cordapp {
+    targetPlatformVersion 6
+    minimumPlatformVersion 6
+
+    workflow {
+        name "backchain-resolution"
+        vendor "com.r3"
+        licence "TBD"
+        versionId 1
+    }
+
+    signing {
+        enabled false
+    }
+}
+
+dependencies {
+    cordaCompile project(":core")
+    cordaCompile project(":node")
+    cordaCompile project(":node-api")
+    cordaCompile project(":node-driver")
+
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
+}
